@@ -674,7 +674,7 @@ copyBtn.Size             = UDim2.new(0, 193, 0, 44)
 copyBtn.Position         = UDim2.new(0.5, -200, 0, 124)
 copyBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 210)
 copyBtn.BorderSizePixel  = 0
-copyBtn.Text             = "📋  Key holen"
+copyBtn.Text             = "📋  Get Key"
 copyBtn.TextColor3       = Color3.fromRGB(255, 255, 255)
 copyBtn.TextSize         = 14
 copyBtn.Font             = Enum.Font.GothamBold
@@ -686,7 +686,7 @@ verifyBtn.Size             = UDim2.new(0, 193, 0, 44)
 verifyBtn.Position         = UDim2.new(0.5, 7, 0, 124)
 verifyBtn.BackgroundColor3 = Color3.fromRGB(40, 170, 85)
 verifyBtn.BorderSizePixel  = 0
-verifyBtn.Text             = "✔  Key prüfen"
+verifyBtn.Text             = "✔  Check Key"
 verifyBtn.TextColor3       = Color3.fromRGB(255, 255, 255)
 verifyBtn.TextSize         = 14
 verifyBtn.Font             = Enum.Font.GothamBold
@@ -725,6 +725,9 @@ verifyBtn.MouseButton1Click:Connect(function()
     local success = verifyKey(key)
 
     local function loadScript()
+
+        if not _G.KeyValidated then return end
+
 -- Project Junior | LinoriaLib v5 | v4 (Testing Build)
 
 local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
@@ -1370,6 +1373,7 @@ end
         statusLabel.TextColor3 = Color3.fromRGB(90, 200, 120)
         task.wait(1.2)
         gui:Destroy()
+        _G.KeyValidated = true
         loadScript() -- <-- Project Junior startet erst HIER
     else
         verifyBtn.Text             = "✔  Key prüfen"
