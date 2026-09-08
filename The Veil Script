@@ -263,52 +263,160 @@ end
 -------------------------------------------------------------------------------
 
 -------------------------------------------------------------------------------
---! platoboost usage documentation
--- copyLink() -> string
--- verifyKey(key: string) -> boolean
--- getFlag(name: string) -> boolean, string | boolean | number
+--! FÜGE DIESEN CODE DIREKT NACH DER PLATOBOOST LIBRARY EIN
+-------------------------------------------------------------------------------
 
--- use copyLink() to copy a link to the clipboard, in which the user will paste it into their browser and complete the keysystem.
--- use verifyKey(key) to verify a key, this will return a boolean value, true means the key was valid, false means it is invalid.
--- use getFlag(name) to get a flag from the server, this will return nil if an error occurs, if no error occurs, the value configured in the platoboost dashboard will be returned.
-
--- IMPORTANT: onMessage is a callback, it will be called upon status update, use it to provide information to user.
--- EXAMPLE: 
---[[
+--! 1. onMessage aktivieren – zeigt dem User Status-Meldungen
 onMessage = function(message)
     game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = "Platoboost status",
-        Text = message
+        Title = "Key System",
+        Text = message,
+        Duration = 5
     })
 end
-]]--
 
--- NOTE: PLACE THIS ENTIRE SCRIPT AT THE TOP OF YOUR SCRIPT, ADD THE LOGIC, THEN OBFUSCATE YOUR SCRIPT.
+--! 2. Key System UI erstellen
+local Players     = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 
---! example usage
---[[
-copyButton.MouseButton1Click:Connect(function()
-    copyLink();
+-- Haupt-ScreenGui
+local gui = Instance.new("ScreenGui")
+gui.Name          = "KeySystem"
+gui.ResetOnSpawn  = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent        = PlayerGui
+
+-- Hauptrahmen
+local frame = Instance.new("Frame")
+frame.Size            = UDim2.new(0, 440, 0, 240)
+frame.Position        = UDim2.new(0.5, -220, 0.5, -120)
+frame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+frame.BorderSizePixel = 0
+frame.Parent          = gui
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+
+-- Titelleiste
+local titleBar = Instance.new("Frame")
+titleBar.Size             = UDim2.new(1, 0, 0, 52)
+titleBar.BackgroundColor3 = Color3.fromRGB(12, 12, 22)
+titleBar.BorderSizePixel  = 0
+titleBar.Parent           = frame
+Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 10)
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size               = UDim2.new(1, 0, 1, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text               = "🔑  Key System"
+titleLabel.TextColor3         = Color3.fromRGB(255, 255, 255)
+titleLabel.TextSize           = 18
+titleLabel.Font               = Enum.Font.GothamBold
+titleLabel.Parent             = titleBar
+
+-- Key-Eingabefeld
+local keyBox = Instance.new("TextBox")
+keyBox.Size              = UDim2.new(0, 400, 0, 44)
+keyBox.Position          = UDim2.new(0.5, -200, 0, 66)
+keyBox.BackgroundColor3  = Color3.fromRGB(38, 38, 52)
+keyBox.BorderSizePixel   = 0
+keyBox.PlaceholderText   = "Key hier einfügen..."
+keyBox.Text              = ""
+keyBox.TextColor3        = Color3.fromRGB(255, 255, 255)
+keyBox.PlaceholderColor3 = Color3.fromRGB(110, 110, 135)
+keyBox.TextSize          = 14
+keyBox.Font              = Enum.Font.Gotham
+keyBox.ClearTextOnFocus  = false
+keyBox.Parent            = frame
+Instance.new("UICorner", keyBox).CornerRadius = UDim.new(0, 7)
+
+-- "Key holen"-Button (kopiert Link in Zwischenablage)
+local copyBtn = Instance.new("TextButton")
+copyBtn.Size             = UDim2.new(0, 193, 0, 44)
+copyBtn.Position         = UDim2.new(0.5, -200, 0, 124)
+copyBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 210)
+copyBtn.BorderSizePixel  = 0
+copyBtn.Text             = "📋  Key holen"
+copyBtn.TextColor3       = Color3.fromRGB(255, 255, 255)
+copyBtn.TextSize         = 14
+copyBtn.Font             = Enum.Font.GothamBold
+copyBtn.Parent           = frame
+Instance.new("UICorner", copyBtn).CornerRadius = UDim.new(0, 7)
+
+-- Verifizier-Button
+local verifyBtn = Instance.new("TextButton")
+verifyBtn.Size             = UDim2.new(0, 193, 0, 44)
+verifyBtn.Position         = UDim2.new(0.5, 7, 0, 124)
+verifyBtn.BackgroundColor3 = Color3.fromRGB(40, 170, 85)
+verifyBtn.BorderSizePixel  = 0
+verifyBtn.Text             = "✔  Key prüfen"
+verifyBtn.TextColor3       = Color3.fromRGB(255, 255, 255)
+verifyBtn.TextSize         = 14
+verifyBtn.Font             = Enum.Font.GothamBold
+verifyBtn.Parent           = frame
+Instance.new("UICorner", verifyBtn).CornerRadius = UDim.new(0, 7)
+
+-- Statustext
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size               = UDim2.new(0, 400, 0, 30)
+statusLabel.Position           = UDim2.new(0.5, -200, 0, 185)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text               = "Hol dir zuerst einen Key, dann gib ihn ein und prüfe ihn."
+statusLabel.TextColor3         = Color3.fromRGB(150, 150, 175)
+statusLabel.TextSize           = 12
+statusLabel.Font               = Enum.Font.Gotham
+statusLabel.TextWrapped        = true
+statusLabel.Parent             = frame
+
+--! 3. Button-Logik
+
+-- "Key holen" -> kopiert den Platoboost-Link
+copyBtn.MouseButton1Click:Connect(function()
+    copyLink()
+    statusLabel.Text      = "Link in Zwischenablage! Im Browser öffnen & Key abschließen."
+    statusLabel.TextColor3 = Color3.fromRGB(90, 200, 120)
 end)
 
-verifyButton.MouseButton1Click:Connect(function()
-    local key = keyBox.Text;
-    local success = verifyKey(key);
+-- "Key prüfen" -> verifiziert den eingegebenen Key
+verifyBtn.MouseButton1Click:Connect(function()
+    local key = keyBox.Text
+
+    if key == "" then
+        statusLabel.Text       = "Bitte zuerst einen Key eingeben."
+        statusLabel.TextColor3 = Color3.fromRGB(220, 75, 75)
+        return
+    end
+
+    -- UI während Prüfung deaktivieren
+    verifyBtn.Text             = "Prüfe..."
+    verifyBtn.BackgroundColor3 = Color3.fromRGB(90, 90, 110)
+    statusLabel.Text           = "Key wird geprüft, bitte warten..."
+    statusLabel.TextColor3     = Color3.fromRGB(150, 150, 175)
+
+    local success = verifyKey(key)
 
     if success then
-        print("key is valid.");
+        statusLabel.Text       = "✔ Key akzeptiert! Script wird geladen..."
+        statusLabel.TextColor3 = Color3.fromRGB(90, 200, 120)
+        task.wait(1.2)
+        gui:Destroy()
+
+        -- =====================================================
+        -- DEIN SCRIPT-CODE KOMMT HIER HIN
+        -- Beispiel: loadstring(game:HttpGet("DEINE_URL"))()
+        -- =====================================================
+
     else
-        print("key is invalid.");
+        -- Button zurücksetzen bei Fehler
+        verifyBtn.Text             = "✔  Key prüfen"
+        verifyBtn.BackgroundColor3 = Color3.fromRGB(40, 170, 85)
+        statusLabel.TextColor3     = Color3.fromRGB(220, 75, 75)
+        -- Fehlermeldung kommt automatisch via onMessage (Notification)
     end
 end)
 
-local flag = getFlag("example_flag");
-if flag ~= nil then
-    print("flag value: " .. flag);
-else
-    print("failed to get flag.");
-end
-]]--
+-------------------------------------------------------------------------------
+--! ENDE DES KEY SYSTEMS
+-------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
 -- Project Junior | LinoriaLib v5 | v4 (Testing Build)
