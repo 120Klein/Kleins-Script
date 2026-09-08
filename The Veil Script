@@ -725,7 +725,643 @@ verifyBtn.MouseButton1Click:Connect(function()
     local success = verifyKey(key)
 
     local function loadScript()
-https://raw.githubusercontent.com/120Klein/Kleins-Script/refs/heads/main/Veil%20Script%20Obf
+-- Project Junior | LinoriaLib v5 | v4 (Testing Build)
+
+local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
+local Library      = loadstring(game:HttpGet(repo .. 'Library.lua'))()
+local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
+local SaveManager  = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
+
+-- ============================================================
+-- SERVICES
+-- ============================================================
+local Players          = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService       = game:GetService("RunService")
+local HttpService      = game:GetService("HttpService")
+local LocalPlayer      = Players.LocalPlayer
+local Camera           = workspace.CurrentCamera
+
+local function getRoot()
+    local c = LocalPlayer.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+local function getHumanoid()
+    local c = LocalPlayer.Character
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+-- ============================================================
+-- STATE (grouped into tables to avoid 200-local limit)
+-- ============================================================
+-- [CHANGED] Added Timer field to Fog for periodic refresh
+local Fog = { Enabled=false, Conn=nil, DescConn=nil, OrigEnd=nil, OrigStart=nil, SavedAtmo={}, Timer=nil }
+local Vis = { ShadowsSaved=nil, GrassLenSaved=nil, DecoSaved=nil, MatSaved={}, TexSaved={}, FXSaved={} }
+local FB  = { Enabled=false, SavedAmbient=nil, SavedOutdoor=nil, SavedBright=nil, SavedColorShift=nil, Conn=nil }
+local Clk = { Conn=nil }
+
+local Fly = { Enabled=false, Speed=60, Conn=nil, Vel=nil, Align=nil, Att0=nil, Att1=nil }
+local Mov = { NoClipEnabled=false, NoClipConn=nil, NoFallEnabled=false, NoFallConns={} }
+-- [REMOVED] Anim and Stun state tables
+local Spec= { Target=nil, Conn=nil }
+
+local ESP = {
+    PlayerEnabled=false,
+    PlayerMaxDist=10000,
+    Labels={}, Conns={},
+}
+
+-- [ADDED] NPC ESP state
+local NpcESP = { Enabled=false, MaxDist=10000, Labels={}, Conn=nil, AddConn=nil }
+
+local Prox = { Enabled=false, Range=1000, Cooldown=20, LastAlert={}, Conn=nil }
+
+-- ============================================================
+-- VISUAL
+-- ============================================================
+-- [CHANGED] applyNoFog now also spawns a periodic refresh loop every 3 seconds
+--           so entering new areas doesn't bring fog back
+local function applyNoFog()
+    if Fog.Timer then task.cancel(Fog.Timer); Fog.Timer=nil end  -- safety: cancel any existing timer
+    local L=game:GetService("Lighting")
+    Fog.OrigEnd=L.FogEnd; Fog.OrigStart=L.FogStart
+    L.FogEnd=100000; L.FogStart=100000
+    for _,o in ipairs(L:GetChildren()) do
+        if o:IsA("Atmosphere") then
+            Fog.SavedAtmo={Density=o.Density,Offset=o.Offset,Haze=o.Haze,Glare=o.Glare}
+            o.Density=0;o.Offset=0;o.Haze=0;o.Glare=0
+        end
+    end
+    Fog.Conn=L:GetPropertyChangedSignal("FogEnd"):Connect(function() if Fog.Enabled then L.FogEnd=100000 end end)
+    Fog.DescConn=L.DescendantAdded:Connect(function(o)
+        if Fog.Enabled and o:IsA("Atmosphere") then o.Density=0;o.Offset=0;o.Haze=0;o.Glare=0 end
+    end)
+    -- Periodic re-apply every 3 seconds to survive area transitions
+    Fog.Timer=task.spawn(function()
+        while Fog.Enabled do
+            local Lc=game:GetService("Lighting")
+            Lc.FogEnd=100000; Lc.FogStart=100000
+            for _,o in ipairs(Lc:GetChildren()) do
+                if o:IsA("Atmosphere") then o.Density=0;o.Offset=0;o.Haze=0;o.Glare=0 end
+            end
+            task.wait(3)
+        end
+    end)
+end
+-- [CHANGED] removeNoFog now also cancels the periodic timer
+local function removeNoFog()
+    if Fog.Conn     then Fog.Conn:Disconnect();     Fog.Conn=nil     end
+    if Fog.DescConn then Fog.DescConn:Disconnect(); Fog.DescConn=nil end
+    if Fog.Timer    then task.cancel(Fog.Timer);    Fog.Timer=nil    end
+    local L=game:GetService("Lighting")
+    if Fog.OrigEnd   then L.FogEnd=Fog.OrigEnd     end
+    if Fog.OrigStart then L.FogStart=Fog.OrigStart end
+    for _,o in ipairs(L:GetChildren()) do
+        if o:IsA("Atmosphere") and Fog.SavedAtmo.Density then
+            o.Density=Fog.SavedAtmo.Density;o.Offset=Fog.SavedAtmo.Offset
+            o.Haze=Fog.SavedAtmo.Haze;o.Glare=Fog.SavedAtmo.Glare
+        end
+    end
+    Fog.SavedAtmo={}
+end
+local function removeShadows()   local L=game:GetService("Lighting"); Vis.ShadowsSaved=L.GlobalShadows; L.GlobalShadows=false end
+local function restoreShadows()  local L=game:GetService("Lighting"); if Vis.ShadowsSaved~=nil then L.GlobalShadows=Vis.ShadowsSaved end end
+local function removeGrass()
+    local t=workspace:FindFirstChildOfClass("Terrain")
+    if t then Vis.GrassLenSaved=t.GrassLength;Vis.DecoSaved=t.Decoration;t.GrassLength=0;t.Decoration=false end
+end
+local function restoreGrass()
+    local t=workspace:FindFirstChildOfClass("Terrain")
+    if t then
+        if Vis.GrassLenSaved~=nil then t.GrassLength=Vis.GrassLenSaved end
+        if Vis.DecoSaved~=nil     then t.Decoration=Vis.DecoSaved end
+    end
+end
+local function removeTextures()
+    Vis.MatSaved={}; Vis.TexSaved={}
+    for _,o in ipairs(workspace:GetDescendants()) do
+        if o:IsA("BasePart") then Vis.MatSaved[o]=o.Material; o.Material=Enum.Material.SmoothPlastic end
+        if o:IsA("Texture") or o:IsA("Decal") then Vis.TexSaved[o]=o.Transparency; o.Transparency=1 end
+    end
+end
+local function restoreTextures()
+    for o,m in pairs(Vis.MatSaved) do if o and o.Parent then o.Material=m end end
+    for o,t in pairs(Vis.TexSaved) do if o and o.Parent then o.Transparency=t end end
+    Vis.MatSaved={}; Vis.TexSaved={}
+end
+local function removePostFX()
+    Vis.FXSaved={}
+    for _,o in ipairs(game:GetService("Lighting"):GetChildren()) do
+        if o:IsA("PostEffect") then Vis.FXSaved[o]=o.Enabled; o.Enabled=false end
+    end
+end
+local function restorePostFX()
+    for o,s in pairs(Vis.FXSaved) do if o and o.Parent then o.Enabled=s end end
+    Vis.FXSaved={}
+end
+local function applyFullBright()
+    local L=game:GetService("Lighting")
+    FB.SavedAmbient=L.Ambient; FB.SavedOutdoor=L.OutdoorAmbient
+    FB.SavedBright=L.Brightness; FB.SavedColorShift=L.ColorShift_Bottom
+    L.Ambient=Color3.new(1,1,1); L.OutdoorAmbient=Color3.new(1,1,1)
+    L.Brightness=2; L.ColorShift_Bottom=Color3.new(0,0,0)
+    FB.Conn=L:GetPropertyChangedSignal("Brightness"):Connect(function() if FB.Enabled then L.Brightness=2 end end)
+end
+local function removeFullBright()
+    if FB.Conn then FB.Conn:Disconnect(); FB.Conn=nil end
+    local L=game:GetService("Lighting")
+    if FB.SavedAmbient    then L.Ambient=FB.SavedAmbient end
+    if FB.SavedOutdoor    then L.OutdoorAmbient=FB.SavedOutdoor end
+    if FB.SavedBright     then L.Brightness=FB.SavedBright end
+    if FB.SavedColorShift then L.ColorShift_Bottom=FB.SavedColorShift end
+end
+local function lockTime(h)
+    if Clk.Conn then Clk.Conn:Disconnect(); Clk.Conn=nil end
+    local L=game:GetService("Lighting"); L.ClockTime=h
+    Clk.Conn=RunService.Heartbeat:Connect(function() L.ClockTime=h end)
+end
+local function unlockTime()
+    if Clk.Conn then Clk.Conn:Disconnect(); Clk.Conn=nil end
+end
+
+-- ============================================================
+-- MOVEMENT
+-- ============================================================
+local function setNoClip(s)
+    Mov.NoClipEnabled=s
+    if Mov.NoClipConn then Mov.NoClipConn:Disconnect(); Mov.NoClipConn=nil end
+    if not s then return end
+    Mov.NoClipConn=RunService.Heartbeat:Connect(function()
+        local c=LocalPlayer.Character; if not c then return end
+        for _,p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide=false end end
+    end)
+end
+
+local function hookNoFall(char)
+    local hum=char:WaitForChild("Humanoid",5); if not hum then return end
+    local preH,inFF=nil,false
+    local sc=hum.StateChanged:Connect(function(_,new)
+        if not Mov.NoFallEnabled then return end
+        if new==Enum.HumanoidStateType.Freefall then inFF=true;preH=hum.Health
+        elseif inFF and (new==Enum.HumanoidStateType.Landed or new==Enum.HumanoidStateType.Running
+            or new==Enum.HumanoidStateType.RunningNoPhysics or new==Enum.HumanoidStateType.Standing) then
+            inFF=false; local sv=preH; preH=nil
+            if sv and sv>0 then task.delay(0.05,function() if hum and hum.Parent and hum.Health<sv then hum.Health=sv end end) end
+        end
+    end)
+    table.insert(Mov.NoFallConns,sc)
+end
+local function setNoFall(s)
+    Mov.NoFallEnabled=s
+    for _,c in ipairs(Mov.NoFallConns) do c:Disconnect() end
+    Mov.NoFallConns={}
+    if not s then return end
+    if LocalPlayer.Character then hookNoFall(LocalPlayer.Character) end
+    local c=LocalPlayer.CharacterAdded:Connect(function(ch) task.wait(0.3);hookNoFall(ch) end)
+    table.insert(Mov.NoFallConns,c)
+end
+
+local function stopFly()
+    if Fly.Conn  then Fly.Conn:Disconnect();  Fly.Conn=nil  end
+    if Fly.Vel   then Fly.Vel:Destroy();      Fly.Vel=nil   end
+    if Fly.Align then Fly.Align:Destroy();    Fly.Align=nil end
+    if Fly.Att0  then Fly.Att0:Destroy();     Fly.Att0=nil  end
+    if Fly.Att1  then Fly.Att1:Destroy();     Fly.Att1=nil  end
+    local hum=getHumanoid(); if hum then hum.PlatformStand=false end
+end
+local function startFly()
+    local root=getRoot(); local hum=getHumanoid()
+    if not root or not hum then return end
+    hum.PlatformStand=true
+    Fly.Att0=Instance.new("Attachment"); Fly.Att0.Parent=root
+    Fly.Att1=Instance.new("Attachment"); Fly.Att1.Parent=workspace.Terrain
+    Fly.Vel=Instance.new("LinearVelocity")
+    Fly.Vel.Attachment0=Fly.Att0; Fly.Vel.MaxForce=math.huge
+    Fly.Vel.RelativeTo=Enum.ActuatorRelativeTo.World
+    Fly.Vel.VelocityConstraintMode=Enum.VelocityConstraintMode.Vector
+    Fly.Vel.VectorVelocity=Vector3.zero; Fly.Vel.Parent=root
+    Fly.Align=Instance.new("AlignOrientation")
+    Fly.Align.Attachment0=Fly.Att0; Fly.Align.Attachment1=Fly.Att1
+    Fly.Align.MaxTorque=math.huge; Fly.Align.MaxAngularVelocity=math.huge
+    Fly.Align.Responsiveness=200; Fly.Align.RigidityEnabled=true; Fly.Align.Parent=root
+    Fly.Conn=RunService.Heartbeat:Connect(function()
+        local r=getRoot(); if not r then return end
+        local dir=Vector3.zero; local cf=Camera.CFrame
+        if UserInputService:IsKeyDown(Enum.KeyCode.W)         then dir+=cf.LookVector  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S)         then dir-=cf.LookVector  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D)         then dir+=cf.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A)         then dir-=cf.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space)     then dir+=Vector3.yAxis  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then dir-=Vector3.yAxis  end
+        Fly.Vel.VectorVelocity=(dir.Magnitude>0 and dir.Unit or Vector3.zero)*Fly.Speed
+        local ld=Vector3.new(cf.LookVector.X,0,cf.LookVector.Z)
+        if ld.Magnitude>0 then Fly.Att1.CFrame=CFrame.new(Vector3.zero,ld) end
+    end)
+end
+local function setFly(s) Fly.Enabled=s; if s then startFly() else stopFly() end end
+
+-- [REMOVED] setAnimSpeed and setNoStun functions
+
+-- ============================================================
+-- SPECTATE
+-- ============================================================
+local function stopSpectate()
+    if Spec.Conn then Spec.Conn:Disconnect(); Spec.Conn=nil end
+    Spec.Target=nil
+    local hum=getHumanoid(); if hum then workspace.CurrentCamera.CameraSubject=hum end
+end
+local function spectatePlayer(player)
+    if not player or not player.Character then Library:Notify('No character.',2); return end
+    local root=player.Character:FindFirstChild("HumanoidRootPart")
+    if not root then Library:Notify('No HumanoidRootPart.',2); return end
+    if Spec.Target==root then stopSpectate(); Library:Notify('Stopped spectating.',2); return end
+    Spec.Target=root
+    if Spec.Conn then Spec.Conn:Disconnect(); Spec.Conn=nil end
+    Spec.Conn=RunService.Heartbeat:Connect(function()
+        if not Spec.Target then return end
+        if not Spec.Target.Parent then
+            Spec.Target=nil; local hum=getHumanoid()
+            if hum then workspace.CurrentCamera.CameraSubject=hum end; return
+        end
+        workspace.CurrentCamera.CameraSubject=Spec.Target
+        pcall(function() LocalPlayer:RequestStreamAroundAsync(Spec.Target.Position,0.1) end)
+    end)
+    Library:Notify('Spectating: '..player.Name,3)
+end
+
+-- ============================================================
+-- PROXIMITY
+-- ============================================================
+local function setProximity(s)
+    Prox.Enabled=s
+    if Prox.Conn then Prox.Conn:Disconnect(); Prox.Conn=nil end
+    Prox.LastAlert={}
+    if not s then return end
+    Prox.Conn=RunService.Heartbeat:Connect(function()
+        local mr=getRoot(); if not mr then return end; local now=tick()
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p==LocalPlayer then continue end
+            local char=p.Character; local root=char and char:FindFirstChild("HumanoidRootPart"); if not root then continue end
+            local dist=math.floor((root.Position-mr.Position).Magnitude)
+            if dist<=Prox.Range then
+                local last=Prox.LastAlert[p]
+                if not last or (now-last)>=Prox.Cooldown then
+                    Prox.LastAlert[p]=now; Library:Notify(string.format("%s nearby - %d studs",p.Name,dist),6)
+                end
+            else Prox.LastAlert[p]=nil end
+        end
+    end)
+end
+Players.PlayerRemoving:Connect(function(p) Prox.LastAlert[p]=nil end)
+
+-- ============================================================
+-- ESP (Player only)
+-- ============================================================
+local function makeLabel(adornee,text,color)
+    local bb=Instance.new("BillboardGui")
+    bb.AlwaysOnTop=true; bb.Size=UDim2.new(0,120,0,40); bb.StudsOffset=Vector3.new(0,3,0)
+    bb.Adornee=adornee; bb.Parent=workspace
+    local lbl=Instance.new("TextLabel"); lbl.Name="TextLabel"
+    lbl.BackgroundTransparency=1; lbl.Size=UDim2.new(1,0,1,0); lbl.Text=text
+    lbl.TextColor3=color or Color3.new(1,1,1); lbl.TextStrokeTransparency=0
+    lbl.Font=Enum.Font.GothamBold; lbl.TextSize=13; lbl.Parent=bb; return bb
+end
+local function clearESP()
+    for _,bb in pairs(ESP.Labels) do if bb and bb.Parent then bb:Destroy() end end
+    ESP.Labels={}
+    for _,c in pairs(ESP.Conns) do c:Disconnect() end
+    ESP.Conns={}
+end
+local function addPlayerESP(player)
+    if player==LocalPlayer then return end
+    local function attach()
+        local char=player.Character; if not char then return end
+        local root=char:FindFirstChild("HumanoidRootPart"); if not root then return end
+        local hum=char:FindFirstChildOfClass("Humanoid")
+        local bb=makeLabel(root,player.Name,Color3.fromRGB(0,200,255)); ESP.Labels[player]=bb
+        local conn=RunService.Heartbeat:Connect(function()
+            if not ESP.PlayerEnabled or not bb or not bb.Parent then return end
+            if not char or not char.Parent then bb:Destroy();return end
+            local hp=hum and math.floor(hum.Health) or "?"; local mhp=hum and math.floor(hum.MaxHealth) or "?"
+            local r2=char:FindFirstChild("HumanoidRootPart"); local mr=getRoot()
+            local dist=(r2 and mr) and math.floor((r2.Position-mr.Position).Magnitude) or 0
+            if dist>ESP.PlayerMaxDist then bb.Enabled=false;return end
+            bb.Enabled=true; bb.TextLabel.Text=string.format("%s\n[%s/%s HP] [%sm]",player.Name,hp,mhp,dist)
+        end)
+        table.insert(ESP.Conns,conn)
+    end
+    attach()
+    local c=player.CharacterAdded:Connect(function() task.wait(0.5);attach() end)
+    table.insert(ESP.Conns,c)
+end
+local function refreshESP()
+    clearESP()
+    if ESP.PlayerEnabled then
+        for _,p in ipairs(Players:GetPlayers()) do addPlayerESP(p) end
+        local c=Players.PlayerAdded:Connect(addPlayerESP); table.insert(ESP.Conns,c)
+    end
+end
+
+-- ============================================================
+-- NPC ESP (workspace.NPCs, name only, orange labels)
+-- ============================================================
+local function clearNpcESP()
+    for _,bb in pairs(NpcESP.Labels) do if bb and bb.Parent then bb:Destroy() end end
+    NpcESP.Labels={}
+    if NpcESP.Conn    then NpcESP.Conn:Disconnect();    NpcESP.Conn=nil    end
+    if NpcESP.AddConn then NpcESP.AddConn:Disconnect(); NpcESP.AddConn=nil end
+end
+local function addNpcESP(npc)
+    if not npc:IsA("Model") or NpcESP.Labels[npc] then return end
+    local adorn=npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart or npc:FindFirstChildOfClass("BasePart")
+    if not adorn then return end
+    NpcESP.Labels[npc]=makeLabel(adorn,npc.Name,Color3.fromRGB(255,170,0))
+end
+local function refreshNpcESP()
+    clearNpcESP()
+    if not NpcESP.Enabled then return end
+    local folder=workspace:FindFirstChild("NPCs")
+    if not folder then Library:Notify('NPCs folder not found.',2); return end
+    for _,npc in ipairs(folder:GetChildren()) do addNpcESP(npc) end
+    -- Watch for NPCs that get added later
+    NpcESP.AddConn=folder.ChildAdded:Connect(function(npc)
+        if NpcESP.Enabled then task.wait(0.5); addNpcESP(npc) end
+    end)
+    -- Heartbeat: hide labels outside max distance
+    NpcESP.Conn=RunService.Heartbeat:Connect(function()
+        local mr=getRoot()
+        for npc,bb in pairs(NpcESP.Labels) do
+            if not bb or not bb.Parent then NpcESP.Labels[npc]=nil; continue end
+            if not npc or not npc.Parent then bb:Destroy(); NpcESP.Labels[npc]=nil; continue end
+            if not mr then bb.Enabled=false; continue end
+            local adorn=npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart or npc:FindFirstChildOfClass("BasePart")
+            if adorn then
+                bb.Enabled=(adorn.Position-mr.Position).Magnitude<=NpcESP.MaxDist
+            else
+                bb.Enabled=false
+            end
+        end
+    end)
+end
+
+-- ============================================================
+-- INIT SYSTEMS
+-- ============================================================
+-- ============================================================
+-- UI WINDOW
+-- ============================================================
+local Window = Library:CreateWindow({Title='Project Junior (Testing Build)', Center=true, AutoShow=true})
+local Tabs = {
+    Main           = Window:AddTab('Main'),
+    Visuals        = Window:AddTab('Visuals'),
+    ESP            = Window:AddTab('ESP'),
+    Misc           = Window:AddTab('Misc'),
+    Settings       = Window:AddTab('Settings'),
+}
+
+-- ============================================================
+-- MAIN TAB
+-- ============================================================
+do
+    local G=Tabs.Main:AddLeftGroupbox('Flight')
+    G:AddToggle('FlyToggle',{Text='Enable Flight',Default=false,Callback=function(v) setFly(v) end})
+    :AddKeyPicker('FlyKeybind',{Default='F1',Mode='Toggle',Text='Flight',Callback=function()
+        local n=not Fly.Enabled; setFly(n); Options.FlyToggle:SetValue(n) end})
+    G:AddSlider('FlySpeedSlider',{Text='Flight Speed',Default=60,Min=10,Max=500,Rounding=0,Suffix=' studs/s',Callback=function(v) Fly.Speed=v end})
+    G:AddSlider('FlyWalkSpeedSlider',{Text='Walk Speed',Default=16,Min=1,Max=300,Rounding=0,Suffix=' studs/s',Callback=function(v) local h=getHumanoid();if h then h.WalkSpeed=v end end})
+    G:AddSlider('FlyJumpPowerSlider',{Text='Jump Power',Default=50,Min=0,Max=300,Rounding=0,Callback=function(v) local h=getHumanoid();if h then h.UseJumpPower=true;h.JumpPower=v end end})
+    G:AddToggle('InfiniteJumpToggle',{Text='Infinite Jump',Default=false,Callback=function(v) _G.UniversalInfJump=v end})
+    UserInputService.JumpRequest:Connect(function()
+        if _G.UniversalInfJump then local h=getHumanoid();if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end end
+    end)
+end
+do
+    local G=Tabs.Main:AddLeftGroupbox('Movement')
+    G:AddToggle('NoClipToggle',{Text='NoClip',Default=false,Callback=function(v) setNoClip(v) end})
+    :AddKeyPicker('NoClipKeybind',{Default='None',Mode='Toggle',Text='NoClip',Callback=function()
+        local n=not Mov.NoClipEnabled; setNoClip(n); Options.NoClipToggle:SetValue(n) end})
+    G:AddToggle('NoFallDmgToggle',{Text='No Fall Damage',Default=false,Callback=function(v) setNoFall(v) end})
+    :AddKeyPicker('NoFallDmgKeybind',{Default='None',Mode='Toggle',Text='No Fall Dmg',Callback=function()
+        local n=not Mov.NoFallEnabled; setNoFall(n); Options.NoFallDmgToggle:SetValue(n) end})
+end
+-- [REMOVED] Combat (No Stun) groupbox
+-- [REMOVED] Animation Speed groupbox
+
+-- ============================================================
+-- VISUALS TAB
+-- ============================================================
+do
+    local G=Tabs.Visuals:AddLeftGroupbox('Visual Tweaks')
+    G:AddToggle('NoFogToggle',{Text='No Fog',Default=false,Callback=function(v) Fog.Enabled=v;if v then applyNoFog() else removeNoFog() end end})
+    :AddKeyPicker('NoFogKeybind',{Default='None',Mode='Toggle',Text='No Fog',Callback=function()
+        local n=not Fog.Enabled; Fog.Enabled=n; Options.NoFogToggle:SetValue(n);if n then applyNoFog() else removeNoFog() end end})
+    G:AddToggle('NoShadowsToggle',{Text='No Shadows',Default=false,Callback=function(v) if v then removeShadows() else restoreShadows() end end})
+    G:AddToggle('NoGrassToggle',{Text='No Grass / Decorations',Default=false,Callback=function(v) if v then removeGrass() else restoreGrass() end end})
+    G:AddToggle('NoTexturesToggle',{Text='No Textures',Default=false,Callback=function(v) if v then removeTextures() else restoreTextures() end end})
+    G:AddToggle('NoPostFXToggle',{Text='No Post-Processing FX',Default=false,Callback=function(v) if v then removePostFX() else restorePostFX() end end})
+end
+do
+    local G=Tabs.Visuals:AddRightGroupbox('Lighting')
+    G:AddToggle('FullBrightToggle',{Text='Full Bright',Default=false,Callback=function(v) FB.Enabled=v;if v then applyFullBright() else removeFullBright() end end})
+    G:AddSlider('TimeSlider',{Text='Time of Day',Default=14,Min=0,Max=24,Rounding=1,Suffix=':00',Callback=function(v) lockTime(v) end})
+    G:AddButton('Unlock Time',function() unlockTime(); Library:Notify('Time unlocked.',2) end)
+end
+
+-- ============================================================
+-- ESP TAB
+-- ============================================================
+do
+    local G=Tabs.ESP:AddLeftGroupbox('Player ESP')
+    G:AddToggle('PlayerESPToggle',{Text='Enable Player ESP',Default=false,Tooltip='Cyan',Callback=function(v) ESP.PlayerEnabled=v;refreshESP() end})
+    :AddKeyPicker('PlayerESPKeybind',{Default='None',Mode='Toggle',Text='Player ESP',Callback=function()
+        local n=not ESP.PlayerEnabled; ESP.PlayerEnabled=n; Options.PlayerESPToggle:SetValue(n); refreshESP() end})
+    G:AddSlider('PlayerESPMaxDistSlider',{Text='Max Distance',Default=10000,Min=50,Max=10000,Rounding=0,Suffix=' studs',Callback=function(v) ESP.PlayerMaxDist=v end})
+end
+-- [ADDED] NPC ESP section
+do
+    local G=Tabs.ESP:AddRightGroupbox('NPC ESP')
+    G:AddToggle('NpcESPToggle',{Text='Enable NPC ESP',Default=false,Tooltip='Orange',Callback=function(v) NpcESP.Enabled=v; refreshNpcESP() end})
+    :AddKeyPicker('NpcESPKeybind',{Default='None',Mode='Toggle',Text='NPC ESP',Callback=function()
+        local n=not NpcESP.Enabled; NpcESP.Enabled=n; Options.NpcESPToggle:SetValue(n); refreshNpcESP() end})
+    G:AddSlider('NpcESPMaxDistSlider',{Text='Max Distance',Default=10000,Min=50,Max=10000,Rounding=0,Suffix=' studs',Callback=function(v) NpcESP.MaxDist=v end})
+end
+
+-- ============================================================
+-- MISC TAB
+-- ============================================================
+do
+    local function getPlayerList()
+        local list={}
+        for _,p in ipairs(Players:GetPlayers()) do if p~=LocalPlayer then table.insert(list,p.Name) end end
+        if #list==0 then table.insert(list,"(no players)") end
+        return list
+    end
+    local G=Tabs.Misc:AddLeftGroupbox('Spectate')
+    G:AddDropdown('SpectateDropdown',{Text='Select Player',Values=getPlayerList(),Default=1})
+    G:AddButton('Spectate Selected',function()
+        local sel=Options.SpectateDropdown.Value
+        if not sel or sel=="(no players)" then Library:Notify('No player selected.',2);return end
+        local t=Players:FindFirstChild(sel); if not t then Library:Notify('Player not found.',2);return end
+        spectatePlayer(t)
+    end)
+    G:AddButton('Spectate Nearest',function()
+        local mr=getRoot(); if not mr then Library:Notify('No character.',2);return end
+        local near,nearD=nil,math.huge
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p==LocalPlayer then continue end
+            local char=p.Character; local root=char and char:FindFirstChild("HumanoidRootPart"); if not root then continue end
+            local d=(root.Position-mr.Position).Magnitude; if d<nearD then nearD=d;near=p end
+        end
+        if near then spectatePlayer(near) else Library:Notify('No players nearby.',2) end
+    end)
+    G:AddButton('Stop Spectating',function() stopSpectate(); Library:Notify('Stopped spectating.',2) end)
+    G:AddButton('Refresh Player List',function() Options.SpectateDropdown:SetValues(getPlayerList()); Library:Notify('Refreshed.',2) end)
+    Players.PlayerAdded:Connect(function() task.wait(0.2); pcall(function() Options.SpectateDropdown:SetValues(getPlayerList()) end) end)
+    Players.PlayerRemoving:Connect(function() task.wait(0.1); pcall(function() Options.SpectateDropdown:SetValues(getPlayerList()) end) end)
+end
+do
+    local G=Tabs.Misc:AddRightGroupbox('Camera')
+    G:AddButton('Reset Camera',function()
+        stopSpectate(); local hum=getHumanoid()
+        if hum then workspace.CurrentCamera.CameraSubject=hum; Library:Notify('Camera reset.',2) end
+    end)
+end
+do
+    local G=Tabs.Misc:AddLeftGroupbox('Proximity Notifier')
+    G:AddToggle('ProximityToggle',{Text='Enable Proximity Notifier',Default=false,Callback=function(v) setProximity(v) end})
+    :AddKeyPicker('ProximityKeybind',{Default='None',Mode='Toggle',Text='Proximity Notifier',Callback=function()
+        local n=not Prox.Enabled; setProximity(n); Options.ProximityToggle:SetValue(n) end})
+    G:AddSlider('ProximityRangeSlider',{Text='Alert Range',Default=1000,Min=50,Max=5000,Rounding=0,Suffix=' studs',Callback=function(v) Prox.Range=v end})
+    G:AddSlider('ProximityCooldownSlider',{Text='Re-alert Cooldown',Default=20,Min=5,Max=120,Rounding=0,Suffix='s',Callback=function(v) Prox.Cooldown=v end})
+end
+-- [ADDED] NPC Teleport section
+do
+    local function getNpcList()
+        local list={}
+        local folder=workspace:FindFirstChild("NPCs")
+        if folder then
+            for _,npc in ipairs(folder:GetChildren()) do
+                if npc:IsA("Model") then table.insert(list,npc.Name) end
+            end
+        end
+        if #list==0 then table.insert(list,"(no NPCs)") end
+        return list
+    end
+    local G=Tabs.Misc:AddRightGroupbox('NPC Teleport')
+    G:AddDropdown('NpcTeleportDropdown',{Text='Select NPC',Values=getNpcList(),Default=1})
+    G:AddButton('Teleport to NPC',function()
+        local sel=Options.NpcTeleportDropdown.Value
+        if not sel or sel=="(no NPCs)" then Library:Notify('No NPC selected.',2);return end
+        local folder=workspace:FindFirstChild("NPCs"); if not folder then Library:Notify('NPCs folder not found.',2);return end
+        local npc=folder:FindFirstChild(sel); if not npc then Library:Notify('NPC not found.',2);return end
+        local root=getRoot(); if not root then Library:Notify('No character.',2);return end
+        local npcRoot=npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart or npc:FindFirstChildOfClass("BasePart")
+        if not npcRoot then Library:Notify('NPC has no root part.',2);return end
+        task.spawn(function()
+            pcall(function() LocalPlayer:RequestStreamAroundAsync(npcRoot.Position,2) end)
+            root.CFrame=npcRoot.CFrame+Vector3.new(0,5,0)
+            Library:Notify('Teleported to '..sel,2)
+        end)
+    end)
+    G:AddButton('Refresh NPC List',function()
+        Options.NpcTeleportDropdown:SetValues(getNpcList()); Library:Notify('NPC list refreshed.',2)
+    end)
+end
+
+-- ============================================================
+-- SETTINGS TAB
+-- ============================================================
+do
+    local G=Tabs.Settings:AddLeftGroupbox('Menu')
+    G:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind',{Default='RightShift',NoUI=true,Text='Menu keybind'})
+    Library.ToggleKeybind=Options.MenuKeybind
+    G:AddToggle('MenuKeybindToggle',{Text='Show Keybind List',Default=true,Callback=function(v) pcall(function() Library.KeybindFrame.Visible=v end) end})
+    G:AddToggle('TransparentBGToggle',{Text='Transparent Background',Default=false,Callback=function(v) pcall(function() Library.MainFrame.BackgroundTransparency=v and 0.35 or 0 end) end})
+end
+do
+    local G=Tabs.Settings:AddLeftGroupbox('Notifications')
+    G:AddToggle('NotifEnabled',{Text='Enable Notifications',Default=true,Callback=function(v) Library.NotificationsEnabled=v end})
+    G:AddSlider('NotifDuration',{Text='Duration',Default=3,Min=1,Max=10,Rounding=0,Suffix='s',Callback=function(v) Library.DefaultNotifDuration=v end})
+end
+do
+    local G=Tabs.Settings:AddRightGroupbox('Utilities')
+    G:AddButton('Rejoin',function() game:GetService("TeleportService"):Teleport(game.PlaceId,LocalPlayer) end)
+    G:AddButton('Reset Character',function() local h=getHumanoid();if h then h.Health=0 end end)
+    G:AddButton('Copy UserId',function() pcall(function() setclipboard(tostring(LocalPlayer.UserId)) end); Library:Notify('UserId: '..LocalPlayer.UserId,3) end)
+    G:AddButton('Copy Game ID',function() pcall(function() setclipboard(tostring(game.PlaceId)) end); Library:Notify('Place ID: '..game.PlaceId,3) end)
+    -- [CHANGED] Stop All Features: removed Anim/Stun, added NpcESP
+    G:AddButton('Stop All Features',function()
+        _G.UniversalInfJump=false; Fog.Enabled=false; FB.Enabled=false
+        ESP.PlayerEnabled=false; NpcESP.Enabled=false
+        Mov.NoFallEnabled=false; Prox.Enabled=false
+        setFly(false); setNoClip(false); setNoFall(false); setProximity(false)
+        stopSpectate()
+        clearESP(); clearNpcESP()
+        removeNoFog(); restoreShadows(); restoreGrass(); restoreTextures(); restorePostFX()
+        removeFullBright(); unlockTime()
+        local keys={
+            'FlyToggle','InfiniteJumpToggle','NoClipToggle','NoFallDmgToggle',
+            'NoFogToggle','NoShadowsToggle','NoGrassToggle','NoTexturesToggle','NoPostFXToggle',
+            'FullBrightToggle','PlayerESPToggle','NpcESPToggle','ProximityToggle',
+        }
+        for _,k in ipairs(keys) do if Options[k] then Options[k]:SetValue(false) end end
+        local hum=getHumanoid(); if hum then workspace.CurrentCamera.CameraSubject=hum end
+        Library:Notify('All features stopped.',2)
+    end)
+end
+-- [ADDED] Unload Script section
+do
+    local G=Tabs.Settings:AddRightGroupbox('Unload')
+    G:AddButton('Unload Script',function()
+        -- Stop and restore everything
+        _G.UniversalInfJump=false; Fog.Enabled=false; FB.Enabled=false
+        ESP.PlayerEnabled=false; NpcESP.Enabled=false
+        Mov.NoFallEnabled=false; Prox.Enabled=false
+        setFly(false); setNoClip(false); setNoFall(false); setProximity(false)
+        stopSpectate()
+        clearESP(); clearNpcESP()
+        removeNoFog(); restoreShadows(); restoreGrass(); restoreTextures(); restorePostFX()
+        removeFullBright(); unlockTime()
+        local hum=getHumanoid()
+        if hum then workspace.CurrentCamera.CameraSubject=hum; hum.PlatformStand=false end
+        Library:Notify('Script unloaded.',2)
+        -- Destroy the UI after a short delay so the notify is visible
+        task.delay(0.5,function() pcall(function() Library:Unload() end) end)
+    end)
+end
+do
+    ThemeManager:SetLibrary(Library); SaveManager:SetLibrary(Library)
+    ThemeManager:SetFolder('JuniorHub'); SaveManager:SetFolder('JuniorHub/configs')
+    SaveManager:IgnoreThemeSettings()
+    SaveManager:SetIgnoreIndexes({'MenuKeybind','MenuKeybindToggle'})
+    ThemeManager:ApplyToTab(Tabs.Settings)
+    SaveManager:BuildConfigSection(Tabs.Settings)
+    task.delay(1,function() SaveManager:LoadAutoloadConfig() end)
+end
+
+-- ============================================================
+-- CHARACTER RESET HANDLER
+-- ============================================================
+-- [CHANGED] Removed Anim/Stun references; added NpcESPToggle to keys
+LocalPlayer.CharacterAdded:Connect(function(char)
+    Fly.Enabled=false; Mov.NoClipEnabled=false; Mov.NoFallEnabled=false
+    ESP.PlayerEnabled=false
+    if Fly.Conn      then Fly.Conn:Disconnect();      Fly.Conn=nil      end
+    if Mov.NoClipConn then Mov.NoClipConn:Disconnect(); Mov.NoClipConn=nil end
+    stopFly()
+    if Spec.Target and not Spec.Target.Parent then Spec.Target=nil end
+    clearESP()
+    Prox.LastAlert={}
+    task.wait(0.2)
+    local hum=char:FindFirstChildOfClass("Humanoid")
+    if hum then pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end); hum.PlatformStand=false end
+    local keys={
+        'FlyToggle','NoClipToggle','PlayerESPToggle','NoFallDmgToggle',
+    }
+    for _,k in ipairs(keys) do if Options[k] then Options[k]:SetValue(false) end end
+end)
+
+Library:Notify('Project Junior (Testing Build) loaded!', 3)
 
 end
 
